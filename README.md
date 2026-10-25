@@ -4,8 +4,6 @@ Paste a message you don't want to deal with (an email, a college notice, a landl
 
 Runs fully on your own computer with a local open-weight model (Gemma 3 4B via Ollama). Nothing is uploaded anywhere.
 
-![Placement notice](screenshots/placement.png)
-![Rental message](screenshots/rental.png)
 
 ## How to run
 
