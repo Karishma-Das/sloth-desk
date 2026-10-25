@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sloth Desk</title>
+<style>
+  :root {
+    --moss: #2e3b2a;
+    --lichen: #e4e9dc;
+    --paper: #f6f8f2;
+    --bark: #5b4a3a;
+    --river: #1f6f78;
+    --river-dark: #17565d;
+    --now: #b3412f;
+    --soon: #a8741a;
+    --later: #4d7a3a;
+    --line: #c5cdb9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --moss: #dfe7d6;
+      --lichen: #1d241a;
+      --paper: #252d21;
+      --bark: #c9b8a4;
+      --river: #6fc0c9;
+      --river-dark: #8fd3da;
+      --now: #ef8a78;
+      --soon: #e3b25a;
+      --later: #98c783;
+      --line: #3d4837;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--lichen);
+    color: var(--moss);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 {
+    font: 600 clamp(2rem, 6vw, 3rem)/1.1 "Iowan Old Style", Palatino, Georgia, serif;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  .sub { color: var(--bark); margin: 0 0 28px; max-width: 54ch; }
+  textarea {
+    width: 100%; min-height: 190px; resize: vertical;
+    padding: 14px; border: 1.5px solid var(--line); border-radius: 10px;
+    background: var(--paper); color: var(--moss); font: inherit;
+  }
+  textarea:focus, select:focus, button:focus-visible {
+    outline: 3px solid var(--river); outline-offset: 2px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 14px 0; }
+  label { display: grid; gap: 4px; font-size: .9rem; color: var(--bark); }
+  select {
+    padding: 9px 10px; border: 1.5px solid var(--line); border-radius: 8px;
+    background: var(--paper); color: var(--moss); font: inherit; min-width: 150px;
+  }
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px; padding: 10px 18px;
+    border: 1.5px solid var(--river); background: var(--paper); color: var(--river-dark);
+  }
+  button.go { background: var(--river); color: #fff; font-weight: 600; margin-left: auto; }
+  button:disabled { opacity: .55; cursor: wait; }
+  .status { font-size: .88rem; color: var(--bark); margin: 4px 0 0; min-height: 1.4em; }
+  .status.bad { color: var(--now); }
+  #out { margin-top: 28px; display: none; }
+  .card {
+    background: var(--paper); border: 1.5px solid var(--line);
+    border-radius: 10px; padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 { font: 600 1.1rem/1.3 "Iowan Old Style", Palatino, Georgia, serif; margin: 0 0 8px; }
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: .85rem;
+    font-weight: 600; border: 1.5px solid currentColor; margin-bottom: 10px;
+  }
+  .badge.now { color: var(--now); }
+  .badge.soon { color: var(--soon); }
+  .badge.whenever, .badge.none { color: var(--later); }
+  ul { margin: 0 0 14px; padding-left: 1.2em; }
+  li { margin: 8px 0; }
+  .warn { color: var(--now); font-size: .9rem; margin: 0 0 12px; }
+  .note { font-size: .85rem; color: var(--bark); }
+  @media (prefers-reduced-motion: no-preference) {
+    #out.show { animation: settle .35s ease-out; }
+    @keyframes settle { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sloth Desk</h1>
+  <p class="sub">Paste any message you don't want to deal with: an email, a text, a bill, a school notice. You get a short checklist of what you have to know and do, with every date, time, amount and place. It runs on your own computer.</p>
+
+  <label for="msg" style="margin-bottom:6px">The message</label>
+  <textarea id="msg" placeholder="Paste it here, or drop a .txt file onto this box"></textarea>
+
+  <div class="row">
+    <label>Model
+      <select id="model"><option value="">Looking for Ollama…</option></select>
+    </label>
+    <button class="go" id="go">Decode it</button>
+  </div>
+  <p class="status" id="status" role="status"></p>
+
+  <section id="out" aria-live="polite">
+    <div class="card" id="c-what"></div>
+    <div class="card" id="c-todo"></div>
+    <p class="note">AI-drafted. Check names, dates and amounts against the original before you act. For legal, medical or money decisions, ask a professional.</p>
+  </section>
+</main>
+
+<script>
+const OLLAMA = "http://localhost:11434";
+const $ = id => document.getElementById(id);
+const msg = $("msg"), modelSel = $("model"), statusEl = $("status"), go = $("go");
+
+function setStatus(text, bad) {
+  statusEl.textContent = text;
+  statusEl.className = "status" + (bad ? " bad" : "");
+}
+
+async function loadModels() {
+  try {
+    const r = await fetch(OLLAMA + "/api/tags");
+    const data = await r.json();
+    const names = (data.models || []).map(m => m.name);
+    if (!names.length) {
+      modelSel.innerHTML = '<option value="">No models installed</option>';
+      setStatus("Ollama is running but has no models. Run: ollama pull gemma3:4b", true);
+      return;
+    }
+    modelSel.innerHTML = "";
+    names.sort((a, b) => (/gemma/.test(b) - /gemma/.test(a)));
+    for (const n of names) {
+      const o = document.createElement("option");
+      o.value = o.textContent = n;
+      modelSel.appendChild(o);
+    }
+    const saved = localStorage.getItem("sloth-model");
+    if (saved && names.includes(saved)) modelSel.value = saved;
+    setStatus("Ready. Nothing leaves this computer.");
+  } catch (e) {
+    modelSel.innerHTML = '<option value="">Ollama not found</option>';
+    setStatus("Can't reach Ollama. Start it, and if this page still can't connect, restart it with OLLAMA_ORIGINS=* (see README).", true);
+  }
+}
+
+msg.addEventListener("dragover", e => e.preventDefault());
+msg.addEventListener("drop", async e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) msg.value = await f.text();
+});
+
+/* ---------- Prompt ---------- */
+
+const SYSTEM = `You turn a message into a short checklist for a busy reader.
+Reply with ONLY a JSON object, no other text:
+{
+ "kind": "what this message is, 6 words or fewer",
+ "urgency": "now" or "soon" or "whenever" or "none",
+ "points": [ "one short sentence", "one short sentence" ]
+}
+Rules:
+1. Every point is ONE short sentence. If the reader must act, start with a verb (Upload, Attend, Pay, Bring, Submit, Reply, Check).
+2. Put ALL details of a point in the same sentence: amount, file format, size limit, deadline, date, time, place, and things to bring. Write dates short, like "29 Oct 2026, 5 pm".
+3. Cover EVERY fact in the message, including things that need no action, such as a list being published on a date. Leave nothing out. Invent nothing.
+4. Order the points by the date they happen, earliest first.
+5. If the message gives a phone number, email or contact, add a last point starting with "Contact:".
+6. No greetings, no thanks, no filler words, no reply drafts.
+7. If nothing needs doing, set urgency to "none" and still list the facts as points.
+8. Write in the same language as the message.`;
+
+const EXAMPLE_IN = `Dear Residents, the water supply will be off on 12 March 2027 from 9 am to 1 pm in Block C. Please store water in advance. Pay the pending maintenance of Rs. 2,400 by 15 March 2027 at the society office, otherwise a late fee of Rs. 200 applies. For questions, call 98765 43210.`;
+
+const EXAMPLE_OUT = JSON.stringify({
+  kind: "Society water and maintenance notice",
+  urgency: "soon",
+  points: [
+    "Store water in advance: supply is off in Block C on 12 Mar 2027, 9 am to 1 pm.",
+    "Pay the pending maintenance of Rs. 2,400 at the society office by 15 Mar 2027 to avoid a Rs. 200 late fee.",
+    "Contact: 98765 43210."
+  ]
+});
+
+/* ---------- Self-check: did the model keep every date, time, amount? ---------- */
+
+const MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec";
+const norm = s => s.toLowerCase().replace(/[\s.,]/g, "");
+
+function factsIn(text) {
+  const facts = [];
+  const seen = new Set();
+  const add = (label, test) => {
+    if (seen.has(label.toLowerCase())) return;
+    seen.add(label.toLowerCase());
+    facts.push({ label, test });
+  };
+
+  // dates like "2 November" / "29th Oct 2026" -> must appear as day + month in output
+  for (const m of text.matchAll(new RegExp("\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(" + MONTHS + ")[a-z]*", "gi"))) {
+    const re = new RegExp("\\b" + m[1] + "(?:st|nd|rd|th)?\\s+" + m[2].toLowerCase() + "[a-z]*", "i");
+    add(m[0], out => re.test(out));
+  }
+  // times like "10:30 am", "5 pm"
+  for (const m of text.matchAll(/\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b/gi))
+    add(m[0], out => norm(out).includes(norm(m[0])));
+  // sizes, percentages, amounts: "2 MB", "Rs. 2,400", "₹500", "$20"
+  for (const m of text.matchAll(/\b\d+(?:\.\d+)?\s?(?:mb|kb|gb|%)/gi))
+    add(m[0], out => norm(out).includes(norm(m[0])));
+  for (const m of text.matchAll(/(?:₹|rs\.?|inr|\$)\s?\d[\d,]*(?:\.\d+)?/gi))
+    add(m[0], out => norm(out).includes(norm(m[0])));
+  // file formats
+  for (const m of text.matchAll(/\b(?:pdf|docx?|xlsx?|jpe?g|png)\b/gi))
+    add(m[0], out => norm(out).includes(norm(m[0])));
+
+  return facts;
+}
+
+function missingFacts(text, parsed) {
+  const out = parsed.points.join(" \n ");
+  return factsIn(text).filter(f => !f.test(out)).map(f => f.label);
+}
+
+/* ---------- Model call ---------- */
+
+function cleanPoints(d) {
+  const arr = Array.isArray(d.points) ? d.points : [];
+  d.points = arr
+    .map(p => typeof p === "string" ? p : Object.values(p || {}).join(" "))
+    .map(p => p.trim())
+    .filter(Boolean);
+  return d;
+}
+
+async function ask(model, messages) {
+  const r = await fetch(OLLAMA + "/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      format: "json",
+      keep_alive: "30m",
+      options: { temperature: 0, num_ctx: 4096 },
+      messages
+    })
+  });
+  if (!r.ok) throw new Error("Ollama answered " + r.status);
+  const data = await r.json();
+  let parsed;
+  try { parsed = JSON.parse(data.message.content); }
+  catch { throw new Error("The model didn't return usable output. Try again or use a larger model."); }
+  return { parsed: cleanPoints(parsed), raw: data.message.content };
+}
+
+/* ---------- Render ---------- */
+
+function render(d, missing) {
+  const what = $("c-what"), todo = $("c-todo");
+  what.replaceChildren(); todo.replaceChildren();
+
+  const urg = ["now", "soon", "whenever", "none"].includes(d.urgency) ? d.urgency : "none";
+  const label = { now: "Do this today", soon: "Do this soon", whenever: "Can wait", none: "Nothing urgent" }[urg];
+  const b = document.createElement("span");
+  b.className = "badge " + urg; b.textContent = label;
+  const h = document.createElement("h2"); h.textContent = d.kind || "Message";
+  h.style.margin = "0";
+  what.append(b, h);
+
+  const h2 = document.createElement("h2"); h2.textContent = "What you need to know and do";
+  todo.appendChild(h2);
+
+  if (missing.length) {
+    const w = document.createElement("p"); w.className = "warn";
+    w.textContent = "Check the original for: " + missing.join(", ") + ". The model may have left these out.";
+    todo.appendChild(w);
+  }
+
+  const ul = document.createElement("ul");
+  d.points.forEach(p => { const li = document.createElement("li"); li.textContent = p; ul.appendChild(li); });
+  todo.appendChild(ul);
+
+  const cp = document.createElement("button"); cp.textContent = "Copy checklist";
+  cp.onclick = async () => {
+    try { await navigator.clipboard.writeText(d.points.join("\n")); cp.textContent = "Copied"; }
+    catch { cp.textContent = "Select and copy manually"; }
+  };
+  todo.appendChild(cp);
+
+  const out = $("out");
+  out.style.display = "block"; out.classList.remove("show"); void out.offsetWidth; out.classList.add("show");
+}
+
+go.addEventListener("click", async () => {
+  const text = msg.value.trim();
+  if (!text) { setStatus("Paste a message first.", true); return; }
+  if (!modelSel.value) { setStatus("Pick a model first. Is Ollama running?", true); return; }
+  localStorage.setItem("sloth-model", modelSel.value);
+  go.disabled = true; setStatus("Reading it for you… small models take a few seconds.");
+  const t0 = performance.now();
+  try {
+    const input = text.slice(0, 12000);
+    const base = [
+      { role: "system", content: SYSTEM },
+      { role: "user", content: EXAMPLE_IN },
+      { role: "assistant", content: EXAMPLE_OUT },
+      { role: "user", content: input }
+    ];
+
+    let { parsed, raw } = await ask(modelSel.value, base);
+    let missing = missingFacts(input, parsed);
+
+    // One automatic retry if any date, time, amount or file format was dropped.
+    if (missing.length) {
+      setStatus("Some details were missing, checking again…");
+      const retry = await ask(modelSel.value, [
+        ...base,
+        { role: "assistant", content: raw },
+        { role: "user", content: "You left out: " + missing.join("; ") + ". Return the full JSON again with every point, and include these details in the right points." }
+      ]);
+      const retryMissing = missingFacts(input, retry.parsed);
+      if (retryMissing.length <= missing.length) { parsed = retry.parsed; missing = retryMissing; }
+    }
+
+    render(parsed, missing);
+    setStatus("Done in " + ((performance.now() - t0) / 1000).toFixed(1) + "s, on this computer.");
+  } catch (e) {
+    setStatus(e.message || "Something went wrong.", true);
+  } finally {
+    go.disabled = false;
+  }
+});
+
+loadModels();
+</script>
+</body>
+</html>
